@@ -10,7 +10,7 @@ import time
 # 1. 설정 및 데이터베이스 초기화
 # ==========================================
 
-st.set_page_config(page_title="AI 회의록 비서 (Pro)", layout="wide")
+st.set_page_config(page_title="AI 회의록 비서", layout="wide")
 
 # DB 연결 및 테이블 생성
 conn = sqlite3.connect('meeting_history_google.db', check_same_thread=False)
@@ -142,14 +142,14 @@ def save_meeting(title, script, summary, filename):
 # 4. UI 구성
 # ==========================================
 
-st.sidebar.title("🗂️ 구글 AI 회의 비서 (Pro)")
+st.sidebar.title("🗂️ 구글 AI 회의 비서")
 api_key = st.sidebar.text_input("Google API Key", type="password", help="AIza로 시작하는 키 입력")
 
 menu = st.sidebar.radio("메뉴", ["새 회의 시작", "회의 기록 (History)"])
 
 if menu == "새 회의 시작":
     st.title("🎙️ 클로바노트 스타일 회의록 생성기")
-    st.markdown("Google **Gemini 1.5 Pro**를 사용하여 **화자 분리(Diarization)** 및 **타임스탬프**가 포함된 기록을 만듭니다.")
+    st.markdown("Google **Gemini**를 사용하여 **화자 분리(Diarization)** 및 **타임스탬프**가 포함된 기록을 만듭니다.")
 
     meeting_title = st.text_input("회의 제목", value=f"회의_{datetime.now().strftime('%Y%m%d_%H%M')}")
     uploaded_file = st.file_uploader("녹음 파일 (m4a, mp3, wav, aac)", type=["m4a", "mp3", "wav", "webm", "aac"])
@@ -191,4 +191,5 @@ elif menu == "회의 기록 (History)":
                     st.text_area("상세 내용", row['script'], height=400, key=f"hist_{row['id']}")
     else:
         st.info("기록이 없습니다.")
+
 
