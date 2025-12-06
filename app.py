@@ -148,7 +148,7 @@ api_key = st.sidebar.text_input("Google API Key", type="password", help="AIza로
 menu = st.sidebar.radio("메뉴", ["새 회의 시작", "회의 기록 (History)"])
 
 if menu == "새 회의 시작":
-    st.title("🎙️ 클로바노트 스타일 회의록 생성기")
+    st.title("🎙️ AI 회의록 생성기")
     st.markdown("Google **Gemini**를 사용하여 **화자 분리(Diarization)** 및 **타임스탬프**가 포함된 기록을 만듭니다.")
 
     meeting_title = st.text_input("회의 제목", value=f"회의_{datetime.now().strftime('%Y%m%d_%H%M')}")
@@ -191,6 +191,7 @@ elif menu == "회의 기록 (History)":
                     st.text_area("상세 내용", row['script'], height=400, key=f"hist_{row['id']}")
     else:
         st.info("기록이 없습니다.")
+
 
 
 
