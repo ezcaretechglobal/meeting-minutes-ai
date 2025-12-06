@@ -172,48 +172,48 @@ if menu == "🔴 실시간 회의 (Live)":
         if 'interim_summary' not in st.session_state:
             st.session_state.interim_summary = "회의가 시작되면 요약이 표시됩니다."
 
-        # --- 녹음기 위젯 ---
-        col_rec, col_info = st.columns([1, 4])
-        with col_rec:
-            # 녹음기 위젯 (사용자가 Stop을 누르면 audio_data 반환)
-            audio_data = mic_recorder(
-                start_prompt="⏺️ 녹음 시작",
-                stop_prompt="⏹️ 녹음 중지 (변환)",
-                key='recorder',
-                format='wav',
-                use_container_width=True
-            )
+# ----------------------------------------------------
+# ✅ 3초 자동 준실시간 녹음 (이 부분만 수정)
+# ----------------------------------------------------
 
-        # --- 데이터 처리 로직 ---
-        if audio_data is not None:
-            # 중복 처리 방지 (Streamlit 특성상 리런될 때 중복 실행 방지)
-            if 'last_id' not in st.session_state or st.session_state.last_id != audio_data['id']:
-                st.session_state.last_id = audio_data['id']
-                
-                # 1. 오디오 조각 저장 (나중에 합치기 위해 리스트에 추가)
-                st.session_state.audio_chunks.append(audio_data['bytes'])
-                
-                # 2. 실시간 STT 변환
-                with st.spinner("✍️ 받아적는 중..."):
-                    text_seg = transcribe_audio_segment(audio_data['bytes'], api_key)
-                    
-                    # 타임스탬프 추가
-                    ts = datetime.now().strftime("%H:%M")
-                    formatted_line = f"[{ts}] {text_seg}"
-                    st.session_state.live_script.append(formatted_line)
-                    
-                    # 3. 간단 중간 요약 (텍스트가 쌓일 때마다)
-                    full_text = "\n".join(st.session_state.live_script)
-                    # 간단하게 Flash 모델로 요약 업데이트 (비용 절약 및 속도)
-                    if len(st.session_state.live_script) % 2 == 0: # 2번 녹음마다 요약 갱신
-                        try:
-                            genai.configure(api_key=api_key)
-                            model_flash = genai.GenerativeModel('gemini-2.5-flash')
-                            res = model_flash.generate_content(f"이 회의 내용을 3줄로 핵심만 요약해:\n{full_text}")
-                            st.session_state.interim_summary = res.text
-                        except: pass
-                
-                st.rerun()
+# 세션 상태 추가
+if "is_recording" not in st.session_state:
+    st.session_state.is_recording = False
+
+c1, c2 = st.columns(2)
+
+with c1:
+    if st.button("▶️ 회의 시작"):
+        st.session_state.is_recording = True
+
+with c2:
+    if st.button("⏹️ 녹음 중지"):
+        st.session_state.is_recording = False
+
+# ▶️ 준실시간 녹음 루프
+if st.session_state.is_recording:
+    st.info("🎧 듣는 중… (3초마다 자동 받아쓰기)")
+
+    audio_data = mic_recorder(
+        record_seconds=3,
+        format="wav",
+        key=str(time.time())  # rerun 중복 방지
+    )
+
+    if audio_data and audio_data.get("bytes"):
+        # 오디오 저장
+        st.session_state.audio_chunks.append(audio_data["bytes"])
+
+        # STT
+        with st.spinner("✍️ 받아적는 중..."):
+            text_seg = transcribe_audio_segment(audio_data["bytes"], api_key)
+
+        ts = datetime.now().strftime("%H:%M:%S")
+        st.session_state.live_script.append(f"[{ts}] {text_seg}")
+
+        # 다음 3초 녹음을 위해 즉시 rerun
+        st.rerun()
+
 
         st.divider()
 
@@ -371,4 +371,5 @@ elif menu == "🗄️ 회의 기록":
 
     else:
         st.info("저장된 회의 기록이 없습니다.")
+
 
