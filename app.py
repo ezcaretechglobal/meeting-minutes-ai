@@ -5,6 +5,7 @@ import sqlite3
 import pandas as pd
 import os
 import time
+import re  # 정규표현식 사용을 위해 추가
 
 # ==========================================
 # 1. 설정 및 데이터베이스 초기화
@@ -28,7 +29,7 @@ c.execute('''
 conn.commit()
 
 # ==========================================
-# 2. 프롬프트 정의 (수정 없음)
+# 2. 프롬프트 정의
 # ==========================================
 
 STT_PROMPT = """
@@ -81,8 +82,28 @@ SUMMARY_PROMPT = """
 """
 
 # ==========================================
-# 3. AI 처리 및 DB 관리 함수
+# 3. AI 처리 및 데이터 포맷팅 함수
 # ==========================================
+
+def format_script_with_spacing(text):
+    """
+    스크립트 가독성을 위해 [MM:SS] 화자 패턴 앞에 줄바꿈을 추가하는 함수
+    """
+    # [00:00] 패턴을 찾아서 그 앞에 줄바꿈 2번(\n\n)을 추가 (단, 맨 처음은 제외)
+    # 정규식 설명: (?<!^)는 문장의 시작이 아닐 때만 동작, (\[\d{2}:\d{2}\])는 시간 패턴 감지
+    formatted_text = re.sub(r'(?<!^)(\[\d{2}:\d{2}\])', r'\n\n\1', text)
+    return formatted_text
+
+def format_script_for_markdown(text):
+    """
+    보기 모드에서 화자 부분을 굵게 표시하기 위한 함수
+    예: [00:00] 화자 1: -> **[00:00] 화자 1:**
+    """
+    # 시간+화자 패턴을 찾아서 볼드(**) 처리
+    # 예: [00:00] 화자 1:  => **[00:00] 화자 1:**
+    # 정규식: 대괄호 시간 + 뒤에 오는 문자열 + 콜론(:)까지 잡음
+    formatted_text = re.sub(r'(\[\d{2}:\d{2}\].*?:)', r'**\1**', text)
+    return formatted_text
 
 def process_audio_with_gemini(uploaded_file, api_key):
     """Google Gemini Pro를 사용하여 STT(화자분리) -> 회의록 생성"""
@@ -100,12 +121,13 @@ def process_audio_with_gemini(uploaded_file, api_key):
             time.sleep(2)
             audio_file = genai.get_file(audio_file.name)
 
-        # 모델 설정 (화자 분리 및 포맷 준수를 위해 Pro 버전 사용 권장)
         model = genai.GenerativeModel('gemini-2.5-flash')
 
         with st.spinner("🗣️ 목소리 구분 및 스크립트 작성 중..."):
             response_script = model.generate_content([audio_file, STT_PROMPT])
-            script_text = response_script.text
+            raw_script = response_script.text
+            # 여기서 바로 줄바꿈 처리 적용
+            script_text = format_script_with_spacing(raw_script)
 
         with st.spinner("📝 스크립트 기반으로 회의록 정리 중..."):
             response_summary = model.generate_content([script_text, SUMMARY_PROMPT])
@@ -120,14 +142,12 @@ def process_audio_with_gemini(uploaded_file, api_key):
             os.remove(temp_filename)
 
 def save_meeting(title, script, summary, filename):
-    """새 회의 저장"""
     date_str = datetime.now().strftime("%Y-%m-%d %H:%M")
     c.execute("INSERT INTO meetings (date, title, script, summary, filename) VALUES (?, ?, ?, ?, ?)",
               (date_str, title, script, summary, filename))
     conn.commit()
 
 def update_meeting(id, title, script, summary):
-    """회의 내용 수정 업데이트"""
     c.execute("UPDATE meetings SET title=?, script=?, summary=? WHERE id=?", (title, script, summary, id))
     conn.commit()
 
@@ -159,30 +179,30 @@ if menu == "새 회의 시작":
                 save_meeting(meeting_title, script_result, summary_result, uploaded_file.name)
                 st.success("완료되었습니다! '회의 기록' 메뉴에서 확인하세요.")
                 
-                # 결과 미리보기 (읽기 전용)
+                # 결과 미리보기
                 tab1, tab2 = st.tabs(["📝 회의록 요약", "🗣️ 상세 스크립트"])
                 with tab1:
                     st.markdown(summary_result)
                 with tab2:
-                    st.text_area("전체 대화 내용", script_result, height=600)
+                    # 마크다운 포맷팅 적용하여 예쁘게 보여주기
+                    display_script = format_script_for_markdown(script_result)
+                    st.markdown(display_script)
                     
             except Exception as e:
                 st.error(f"오류 발생: {e}")
 
 # ----------------------------------------------------
-# [메뉴 2] 회의 기록 (History) - 보기/수정 모드 분리
+# [메뉴 2] 회의 기록 (History)
 # ----------------------------------------------------
 elif menu == "회의 기록 (History)":
     st.title("🗄️ 지난 회의 기록")
     
-    # DB에서 최신순으로 가져오기
     df = pd.read_sql_query("SELECT * FROM meetings ORDER BY id DESC", conn)
     
     if not df.empty:
         for index, row in df.iterrows():
             with st.expander(f"[{row['date']}] {row['title']}"):
                 
-                # 세션 스테이트 키 생성 (각 회의록마다 별도의 수정 모드 상태를 가짐)
                 edit_key = f"edit_mode_{row['id']}"
                 if edit_key not in st.session_state:
                     st.session_state[edit_key] = False
@@ -193,54 +213,68 @@ elif menu == "회의 기록 (History)":
                 if st.session_state[edit_key]:
                     st.info("수정 모드입니다. 내용을 수정하고 저장을 누르세요.")
                     
-                    # 1. 제목 수정
                     new_title = st.text_input("회의 제목", value=row['title'], key=f"title_{row['id']}")
                     
-                    # 2. 탭 (에디터)
                     tab_edit_sum, tab_edit_scr = st.tabs(["📝 회의록 수정", "🗣️ 스크립트 수정"])
                     
                     with tab_edit_sum:
                         new_summary = st.text_area("summary_edit", value=row['summary'], height=500, label_visibility="collapsed", key=f"sum_{row['id']}")
                     
                     with tab_edit_scr:
+                        # 수정 모드에서는 원본 텍스트(줄바꿈 되어있음)를 그대로 보여줌
                         new_script = st.text_area("script_edit", value=row['script'], height=500, label_visibility="collapsed", key=f"scr_{row['id']}")
 
-                    # 3. 버튼 (저장 / 취소)
                     col_save, col_cancel = st.columns([1, 8])
                     with col_save:
                         if st.button("💾 저장", key=f"save_{row['id']}"):
                             update_meeting(row['id'], new_title, new_script, new_summary)
-                            st.session_state[edit_key] = False # 모드 해제
+                            st.session_state[edit_key] = False
                             st.success("저장되었습니다.")
-                            st.rerun() # 새로고침
+                            st.rerun()
                     with col_cancel:
                         if st.button("❌ 취소", key=f"cancel_{row['id']}"):
-                            st.session_state[edit_key] = False # 모드 해제
+                            st.session_state[edit_key] = False
                             st.rerun()
 
                 # ----------------------------------------
-                # [모드 2] 보기 모드 (View Mode) - Default
+                # [모드 2] 보기 모드 (View Mode)
                 # ----------------------------------------
                 else:
-                    # 1. 제목 및 버튼
                     col_title, col_edit_btn = st.columns([8, 1])
                     with col_title:
                         st.markdown(f"### {row['title']}")
                     with col_edit_btn:
                         if st.button("✏️ 수정", key=f"edit_btn_{row['id']}"):
-                            st.session_state[edit_key] = True # 수정 모드 켜기
+                            st.session_state[edit_key] = True
                             st.rerun()
                     
-                    # 2. 탭 (뷰어 - Markdown 렌더링)
                     tab_view_sum, tab_view_scr = st.tabs(["📝 회의록 요약", "🗣️ 상세 스크립트"])
                     
                     with tab_view_sum:
-                        # 깔끔한 마크다운 형태로 보여주기
                         st.markdown(row['summary'])
                     
                     with tab_view_scr:
-                        # 스크립트는 읽기 전용 텍스트박스나 그냥 텍스트로 표시
-                        st.text_area("전체 대화 내용", value=row['script'], height=400, disabled=True, key=f"view_scr_{row['id']}")
+                        # 보기 모드에서는 가독성을 위해 마크다운 볼드 처리 적용
+                        styled_script = format_script_for_markdown(row['script'])
+                        
+                        # 박스 안에 넣어서 스크롤 가능하게 하고 배경색 추가 (채팅창 느낌)
+                        st.markdown(
+                            f"""
+                            <div style="
+                                background-color: #f9f9f9; 
+                                padding: 20px; 
+                                border-radius: 10px; 
+                                border: 1px solid #ddd;
+                                max-height: 500px; 
+                                overflow-y: auto;
+                                font-size: 15px;
+                                line-height: 1.6;
+                            ">
+                                {styled_script.replace(chr(10), '<br>')}
+                            </div>
+                            """, 
+                            unsafe_allow_html=True
+                        )
 
     else:
         st.info("아직 저장된 회의 기록이 없습니다.")
