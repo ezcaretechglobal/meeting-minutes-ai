@@ -14,15 +14,14 @@ from streamlit_mic_recorder import mic_recorder
 # 1. 설정 및 데이터베이스 초기화
 # ==========================================
 
-# 페이지 설정은 반드시 코드 최상단에 있어야 합니다.
-st.set_page_config(page_title="AI 회의록 비서 (Video Support)", layout="wide")
+st.set_page_config(page_title="AI 회의록 비서 (Final)", layout="wide")
 
-# DB 연결 (충돌 방지를 위해 v4로 이름 변경)
+# DB 연결 (충돌 방지를 위해 v4 사용)
 db_filename = 'meeting_history_v4.db'
 conn = sqlite3.connect(db_filename, check_same_thread=False)
 c = conn.cursor()
 
-# 테이블 생성 (구조가 변경되었으므로 새로운 DB에 생성됨)
+# 테이블 생성
 c.execute('''
     CREATE TABLE IF NOT EXISTS meetings (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -60,7 +59,7 @@ def merge_audio_bytes(audio_chunks):
 def transcribe_audio_segment(audio_bytes, api_key):
     """Gemini 1.5 Flash (빠른 STT)"""
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-2.5-flash')
+    model = genai.GenerativeModel('gemini-1.5-flash')
     
     temp_filename = f"temp_{int(time.time())}.wav"
     with open(temp_filename, "wb") as f:
@@ -80,7 +79,7 @@ def transcribe_audio_segment(audio_bytes, api_key):
 def generate_final_report(input_content, api_key, is_file=False):
     """Gemini 1.5 Pro (최종 회의록)"""
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-2.5-flash')
+    model = genai.GenerativeModel('gemini-1.5-pro')
     
     SUMMARY_PROMPT = """
     # 역할
@@ -105,10 +104,8 @@ def generate_final_report(input_content, api_key, is_file=False):
     """
 
     if is_file:
-        # 파일 업로드인 경우
         prompt = [input_content, f"이 미디어 파일 전체를 분석해서 회의록을 작성해줘.\n{SUMMARY_PROMPT}"]
     else:
-        # 텍스트 스크립트인 경우
         prompt = f"아래 스크립트를 바탕으로 회의록을 작성해.\n[스크립트]\n{input_content}\n{SUMMARY_PROMPT}"
     
     try:
@@ -118,9 +115,176 @@ def generate_final_report(input_content, api_key, is_file=False):
 
 def save_to_db(title, script, summary, filename, audio_blob):
     date_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-    c.execute("INSERT INTO meetings (date, title, script, summary, filename, audio_blob) VALUES (?, ?, ?, ?, ?, ?)",
-              (date_str, title, script, summary, filename, audio_blob))
+    query = "INSERT INTO meetings (date, title, script, summary, filename, audio_blob) VALUES (?, ?, ?, ?, ?, ?)"
+    c.execute(query, (date_str, title, script, summary, filename, audio_blob))
     conn.commit()
 
 def update_db(id, title, script, summary):
-    c.execute("UPDATE meetings SET title=?, scri
+    # 에러가 발생했던 부분을 안전하게 수정했습니다.
+    query = "UPDATE meetings SET title=?, script=?, summary=? WHERE id=?"
+    c.execute(query, (title, script, summary, id))
+    conn.commit()
+
+# ==========================================
+# 3. UI 구성
+# ==========================================
+
+st.sidebar.title("🗂️ 구글 AI 회의 비서")
+api_key = st.sidebar.text_input("Google API Key", type="password", help="AIza로 시작하는 키 입력")
+
+menu = st.sidebar.radio("메뉴", ["🔴 실시간 회의 (Live)", "📂 파일 업로드 (MP3/MP4)", "🗄️ 회의 기록"])
+
+# ----------------------------------------------------
+# [메뉴 1] 🔴 실시간 회의 (Live)
+# ----------------------------------------------------
+if menu == "🔴 실시간 회의 (Live)":
+    st.title("🔴 실시간 회의 녹음")
+    
+    if not api_key: st.warning("👈 API Key를 입력해주세요.")
+    else:
+        if 'live_script' not in st.session_state: st.session_state.live_script = []
+        if 'audio_chunks' not in st.session_state: st.session_state.audio_chunks = []
+        if 'interim_summary' not in st.session_state: st.session_state.interim_summary = "회의가 시작되면 요약이 표시됩니다."
+
+        col_rec, col_info = st.columns([1, 4])
+        with col_rec:
+            audio_data = mic_recorder(
+                start_prompt="⏺️ 녹음 시작", stop_prompt="⏹️ 녹음 중지", key='recorder', format='wav', use_container_width=True
+            )
+
+        if audio_data is not None:
+            if 'last_id' not in st.session_state or st.session_state.last_id != audio_data['id']:
+                st.session_state.last_id = audio_data['id']
+                st.session_state.audio_chunks.append(audio_data['bytes'])
+                
+                with st.spinner("✍️ 받아적는 중..."):
+                    text_seg = transcribe_audio_segment(audio_data['bytes'], api_key)
+                    st.session_state.live_script.append(f"[{datetime.now().strftime('%H:%M')}] {text_seg}")
+                    
+                    if len(st.session_state.live_script) % 2 == 0:
+                        try:
+                            genai.configure(api_key=api_key)
+                            res = genai.GenerativeModel('gemini-1.5-flash').generate_content(f"3줄 요약해:\n" + "\n".join(st.session_state.live_script))
+                            st.session_state.interim_summary = res.text
+                        except: pass
+                st.rerun()
+
+        st.divider()
+        c1, c2 = st.columns([2, 1])
+        with c1: st.text_area("Script", value="\n\n".join(st.session_state.live_script), height=400, disabled=True)
+        with c2: st.info(st.session_state.interim_summary)
+
+        if st.button("💾 저장하기", type="primary", use_container_width=True):
+            if not st.session_state.live_script: st.error("내용이 없습니다.")
+            else:
+                with st.spinner("정리 중..."):
+                    merged = merge_audio_bytes(st.session_state.audio_chunks)
+                    f_script = "\n\n".join(st.session_state.live_script)
+                    f_sum = generate_final_report(f_script, api_key, is_file=False)
+                    save_to_db(f"회의_{datetime.now().strftime('%Y%m%d_%H%M')}", f_script, f_sum, "live_record.wav", merged)
+                    
+                    st.session_state.live_script = []
+                    st.session_state.audio_chunks = []
+                    st.session_state.interim_summary = ""
+                    st.success("저장 완료!")
+                    time.sleep(2)
+                    st.rerun()
+
+# ----------------------------------------------------
+# [메뉴 2] 📂 파일 업로드 (MP4 지원)
+# ----------------------------------------------------
+elif menu == "📂 파일 업로드 (MP3/MP4)":
+    st.title("📂 파일 업로드 회의록")
+    st.markdown("음성(mp3, wav) 또는 **동영상(mp4)** 파일을 업로드하세요.")
+    
+    title = st.text_input("회의 제목", value=f"회의_{datetime.now().strftime('%Y%m%d_%H%M')}")
+    uploaded_file = st.file_uploader("파일 선택", type=["m4a", "mp3", "wav", "webm", "aac", "mp4"])
+
+    if uploaded_file and st.button("분석 시작"):
+        if not api_key: st.error("API Key 필요")
+        else:
+            try:
+                genai.configure(api_key=api_key)
+                temp_filename = "temp_" + uploaded_file.name
+                with open(temp_filename, "wb") as f: f.write(uploaded_file.getbuffer())
+                
+                with st.spinner("미디어 파일 업로드 및 AI 분석 중..."):
+                    media_file = genai.upload_file(path=temp_filename)
+                    while media_file.state.name == "PROCESSING":
+                        time.sleep(2)
+                        media_file = genai.get_file(media_file.name)
+                    
+                    stt_model = genai.GenerativeModel('gemini-1.5-pro')
+                    res_script = stt_model.generate_content([media_file, "이 미디어의 모든 대화 내용을 [MM:SS] 화자: 내용 형식으로 받아적어줘."])
+                    script_text = res_script.text
+                    
+                    res_sum = generate_final_report(media_file, api_key, is_file=True)
+                    
+                    save_to_db(title, script_text, res_sum, uploaded_file.name, uploaded_file.getvalue())
+                    st.success("완료!")
+                    if os.path.exists(temp_filename): os.remove(temp_filename)
+            except Exception as e: st.error(f"오류: {e}")
+
+# ----------------------------------------------------
+# [메뉴 3] 🗄️ 회의 기록
+# ----------------------------------------------------
+elif menu == "🗄️ 회의 기록":
+    st.title("🗄️ 지난 회의 기록")
+    
+    try:
+        df = pd.read_sql_query("SELECT id, date, title, script, summary, filename FROM meetings ORDER BY id DESC", conn)
+    except Exception as e:
+        st.error("DB 로드 오류. 테이블 구조가 다를 수 있습니다.")
+        df = pd.DataFrame()
+    
+    if not df.empty:
+        for index, row in df.iterrows():
+            with st.expander(f"[{row['date']}] {row['title']}"):
+                
+                c.execute("SELECT audio_blob FROM meetings WHERE id=?", (row['id'],))
+                blob_result = c.fetchone()
+                blob_data = blob_result[0] if blob_result else None
+                
+                if blob_data:
+                    file_ext = row['filename'].split('.')[-1].lower() if row['filename'] else 'wav'
+                    st.markdown(f"### 🎬 원본 미디어 ({file_ext.upper()})")
+                    
+                    if file_ext == 'mp4':
+                        st.video(blob_data, format="video/mp4")
+                        mime_type = "video/mp4"
+                    else:
+                        st.audio(blob_data, format=f'audio/{file_ext}')
+                        mime_type = f"audio/{file_ext}"
+
+                    st.download_button("💾 파일 다운로드", data=blob_data, file_name=row['filename'], mime=mime_type)
+                else:
+                    st.info("파일 없음")
+
+                st.divider()
+
+                edit_key = f"edit_{row['id']}"
+                if edit_key not in st.session_state: st.session_state[edit_key] = False
+                
+                if st.session_state[edit_key]:
+                    new_t = st.text_input("제목", value=row['title'], key=f"t_{row['id']}")
+                    t1, t2 = st.tabs(["요약 수정", "스크립트 수정"])
+                    with t1: n_s = st.text_area("sum", value=row['summary'], height=300, key=f"s_{row['id']}")
+                    with t2: n_sc = st.text_area("scr", value=row['script'], height=300, key=f"sc_{row['id']}")
+                    
+                    if st.button("저장", key=f"sv_{row['id']}"):
+                        update_db(row['id'], new_t, n_sc, n_s)
+                        st.session_state[edit_key] = False
+                        st.rerun()
+                else:
+                    c1, c2 = st.columns([9,1])
+                    with c1: st.markdown(f"### {row['title']}")
+                    with c2: 
+                        if st.button("✏️", key=f"ed_{row['id']}"):
+                            st.session_state[edit_key] = True
+                            st.rerun()
+                    
+                    t1, t2 = st.tabs(["📝 회의록", "🗣️ 스크립트"])
+                    with t1: st.markdown(row['summary'])
+                    with t2: st.markdown(f"<div style='background-color:#f9f9f9;padding:15px;max-height:400px;overflow-y:auto;'>{row['script'].replace(chr(10), '<br>')}</div>", unsafe_allow_html=True)
+    else:
+        st.info("기록 없음")
