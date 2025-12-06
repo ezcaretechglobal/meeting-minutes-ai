@@ -144,53 +144,36 @@ menu = st.sidebar.radio("메뉴", ["🔴 실시간 회의 (Live)", "📂 파일 
 # ==========================================
 
 if menu == "🔴 실시간 회의 (Live)":
-    st.title("🔴 실시간 회의 (3초 자동 받아쓰기)")
+    st.title("🔴 실시간 회의 (준실시간 받아쓰기)")
 
     if not api_key:
-        st.warning("API Key를 입력해주세요.")
+        st.warning("API Key 입력 필요")
         st.stop()
 
-    if "is_recording" not in st.session_state:
-        st.session_state.is_recording = False
     if "live_script" not in st.session_state:
         st.session_state.live_script = []
     if "audio_chunks" not in st.session_state:
         st.session_state.audio_chunks = []
-    if "mic_key" not in st.session_state:
-        st.session_state.mic_key = 0
 
-    c1, c2 = st.columns(2)
-    with c1:
-        if st.button("▶️ 회의 시작"):
-            st.session_state.is_recording = True
-    with c2:
-        if st.button("⏹️ 녹음 중지"):
-            st.session_state.is_recording = False
+    audio = mic_recorder(
+        start_prompt="🎙️ 말하기 (2~5초)",
+        stop_prompt="⏹️ 변환하기",
+        format="wav",
+        key="live_mic",
+    )
 
-    st.divider()
+    if audio and audio.get("bytes"):
+        st.session_state.audio_chunks.append(audio["bytes"])
 
-    if st.session_state.is_recording:
-        st.info("🎧 듣는 중… (3초마다 자동 인식)")
+        with st.spinner("✍️ 받아적는 중..."):
+            text = transcribe_audio_segment(audio["bytes"], api_key)
 
-        audio = mic_recorder(
-            record_seconds=3,
-            format="wav",
-            key=f"mic_{st.session_state.mic_key}",
-        )
+        ts = datetime.now().strftime("%H:%M:%S")
+        st.session_state.live_script.append(f"[{ts}] {text}")
 
-        if audio and audio.get("bytes"):
-            st.session_state.mic_key += 1
-            st.session_state.audio_chunks.append(audio["bytes"])
+        st.rerun()
 
-            with st.spinner("✍️ 받아적는 중..."):
-                text = transcribe_audio_segment(audio["bytes"], api_key)
-
-            ts = datetime.now().strftime("%H:%M:%S")
-            st.session_state.live_script.append(f"[{ts}] {text}")
-
-            st.rerun()
-
-    st.subheader("📜 실시간 스크립트")
+    st.subheader("📜 누적 스크립트")
     st.text_area(
         "Transcript",
         "\n\n".join(st.session_state.live_script),
@@ -198,33 +181,22 @@ if menu == "🔴 실시간 회의 (Live)":
         disabled=True,
     )
 
-    st.caption(f"녹음된 오디오 조각: {len(st.session_state.audio_chunks)}개")
-
-    st.divider()
-
     if st.button("💾 회의 종료 및 저장", type="primary"):
-        if not st.session_state.live_script:
-            st.error("저장할 내용이 없습니다.")
-        else:
-            merged_audio = merge_audio_bytes(st.session_state.audio_chunks)
-            final_script = "\n\n".join(st.session_state.live_script)
-            summary = generate_final_report(final_script, api_key)
+        merged_audio = merge_audio_bytes(st.session_state.audio_chunks)
+        final_script = "\n\n".join(st.session_state.live_script)
+        summary = generate_final_report(final_script, api_key)
 
-            save_to_db(
-                f"회의_{datetime.now().strftime('%Y%m%d_%H%M')}",
-                final_script,
-                summary,
-                merged_audio,
-            )
+        save_to_db(
+            f"회의_{datetime.now().strftime('%Y%m%d_%H%M')}",
+            final_script,
+            summary,
+            merged_audio,
+        )
 
-            st.session_state.is_recording = False
-            st.session_state.live_script = []
-            st.session_state.audio_chunks = []
-            st.session_state.mic_key = 0
-
-            st.success("✅ 저장 완료")
-            time.sleep(1)
-            st.rerun()
+        st.session_state.live_script = []
+        st.session_state.audio_chunks = []
+        st.success("✅ 저장 완료")
+        st.rerun()
 
 # ==========================================
 # 📂 파일 업로드
@@ -295,3 +267,4 @@ elif menu == "🗄️ 회의 기록":
             st.markdown(
                 row["script"].replace("\n", "<br>"), unsafe_allow_html=True
             )
+
