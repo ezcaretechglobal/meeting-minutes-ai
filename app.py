@@ -111,7 +111,7 @@ def process_audio_with_gemini(audio_file_path, api_key):
             time.sleep(2)
             uploaded_file = genai.get_file(uploaded_file.name)
 
-        model = genai.GenerativeModel('gemini-2.5-flash')
+        model = genai.GenerativeModel('gemini-2.5-pro')
 
         with st.spinner("🗣️ 화자 분리 및 정밀 스크립트 작성 중..."):
             response_script = model.generate_content([uploaded_file, STT_PROMPT])
@@ -130,7 +130,7 @@ def process_audio_with_gemini(audio_file_path, api_key):
 def generate_interim_summary(text_chunk, api_key):
     """(실시간용) 중간 요약 생성"""
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-2.5-flash') # 빠르기를 위해 Flash 사용
+    model = genai.GenerativeModel('gemini-1.5-flash') # 빠르기를 위해 Flash 사용
     prompt = f"다음은 진행 중인 회의 내용의 일부야. 현재까지의 논의 내용을 3문장으로 핵심만 요약해줘:\n\n{text_chunk}"
     try:
         response = model.generate_content(prompt)
