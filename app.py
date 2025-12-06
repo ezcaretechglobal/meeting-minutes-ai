@@ -57,9 +57,9 @@ def merge_audio_bytes(audio_chunks):
         return None
 
 def transcribe_audio_segment(audio_bytes, api_key):
-    """Gemini 1.5 Flash (빠른 STT)"""
+    """Gemini 2.5 Flash (빠른 STT)"""
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    model = genai.GenerativeModel('gemini-2.5-flash')
     
     temp_filename = f"temp_{int(time.time())}.wav"
     with open(temp_filename, "wb") as f:
@@ -77,9 +77,9 @@ def transcribe_audio_segment(audio_bytes, api_key):
         if os.path.exists(temp_filename): os.remove(temp_filename)
 
 def generate_final_report(input_content, api_key, is_file=False):
-    """Gemini 1.5 Pro (최종 회의록)"""
+    """Gemini 2.5 Pro (최종 회의록)"""
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-1.5-pro')
+    model = genai.GenerativeModel('gemini-2.5-pro')
     
     SUMMARY_PROMPT = """
     # 역할
@@ -164,7 +164,7 @@ if menu == "🔴 실시간 회의 (Live)":
                     if len(st.session_state.live_script) % 2 == 0:
                         try:
                             genai.configure(api_key=api_key)
-                            res = genai.GenerativeModel('gemini-1.5-flash').generate_content(f"3줄 요약해:\n" + "\n".join(st.session_state.live_script))
+                            res = genai.GenerativeModel('gemini-2.5-flash').generate_content(f"3줄 요약해:\n" + "\n".join(st.session_state.live_script))
                             st.session_state.interim_summary = res.text
                         except: pass
                 st.rerun()
@@ -214,7 +214,7 @@ elif menu == "📂 파일 업로드 (MP3/MP4)":
                         time.sleep(2)
                         media_file = genai.get_file(media_file.name)
                     
-                    stt_model = genai.GenerativeModel('gemini-1.5-pro')
+                    stt_model = genai.GenerativeModel('gemini-2.5-pro')
                     res_script = stt_model.generate_content([media_file, "이 미디어의 모든 대화 내용을 [MM:SS] 화자: 내용 형식으로 받아적어줘."])
                     script_text = res_script.text
                     
@@ -288,3 +288,4 @@ elif menu == "🗄️ 회의 기록":
                     with t2: st.markdown(f"<div style='background-color:#f9f9f9;padding:15px;max-height:400px;overflow-y:auto;'>{row['script'].replace(chr(10), '<br>')}</div>", unsafe_allow_html=True)
     else:
         st.info("기록 없음")
+
