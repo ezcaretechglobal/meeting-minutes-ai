@@ -70,7 +70,7 @@ def merge_audio_bytes(audio_chunks):
 def transcribe_audio_segment(audio_bytes, api_key):
     """Gemini 1.5 Flash를 사용하여 빠른 STT 변환"""
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    model = genai.GenerativeModel('gemini-2.5-flash')
     
     temp_filename = f"temp_{int(time.time())}.wav"
     with open(temp_filename, "wb") as f:
@@ -94,7 +94,7 @@ def transcribe_audio_segment(audio_bytes, api_key):
 def generate_final_report(full_script, api_key):
     """Gemini 1.5 Pro를 사용하여 최종 회의록 생성"""
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-1.5-pro')
+    model = genai.GenerativeModel('gemini-2.5-flash')
     
     # 사용자 요청 프롬프트 적용
     SUMMARY_PROMPT = """
@@ -208,7 +208,7 @@ if menu == "🔴 실시간 회의 (Live)":
                     if len(st.session_state.live_script) % 2 == 0: # 2번 녹음마다 요약 갱신
                         try:
                             genai.configure(api_key=api_key)
-                            model_flash = genai.GenerativeModel('gemini-1.5-flash')
+                            model_flash = genai.GenerativeModel('gemini-2.5-flash')
                             res = model_flash.generate_content(f"이 회의 내용을 3줄로 핵심만 요약해:\n{full_text}")
                             st.session_state.interim_summary = res.text
                         except: pass
@@ -282,7 +282,7 @@ elif menu == "📂 파일 업로드":
                         time.sleep(1)
                         audio_file = genai.get_file(audio_file.name)
                     
-                    model = genai.GenerativeModel('gemini-1.5-pro')
+                    model = genai.GenerativeModel('gemini-2.5-flash')
                     
                     # STT
                     res_script = model.generate_content([audio_file, "이 오디오 전체를 스크립트로 작성해줘. [MM:SS] 화자: 내용 형식으로."])
@@ -371,3 +371,4 @@ elif menu == "🗄️ 회의 기록":
 
     else:
         st.info("저장된 회의 기록이 없습니다.")
+
