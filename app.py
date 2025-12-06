@@ -153,7 +153,7 @@ def update_db(id, title, script, summary):
 st.sidebar.title("🗂️ 구글 AI 회의 비서")
 api_key = st.sidebar.text_input("Google API Key", type="password", help="AIza로 시작하는 키 입력")
 
-menu = st.sidebar.radio("메뉴", ["🔴 실시간 회의 (Live)", "📂 파일 업로드 (MP3/MP4)", "🗄️ 회의 기록"])
+menu = st.sidebar.radio("메뉴", ["🔴 실시간 회의 (Live)", "📂 파일 업로드", "🗄️ 회의 기록"])
 
 # ----------------------------------------------------
 # [메뉴 1] 🔴 실시간 회의 (Live)
@@ -318,3 +318,4 @@ elif menu == "🗄️ 회의 기록":
                     with t2: st.markdown(f"<div style='background-color:#f9f9f9;padding:15px;max-height:400px;overflow-y:auto;'>{row['script'].replace(chr(10), '<br>')}</div>", unsafe_allow_html=True)
     else:
         st.info("기록 없음")
+
