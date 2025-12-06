@@ -100,6 +100,7 @@ def process_audio_with_gemini(uploaded_file, api_key):
             time.sleep(2)
             audio_file = genai.get_file(audio_file.name)
 
+        # 모델 설정 (화자 분리 및 포맷 준수를 위해 Pro 버전 사용 권장)
         model = genai.GenerativeModel('gemini-2.5-flash')
 
         with st.spinner("🗣️ 목소리 구분 및 스크립트 작성 중..."):
@@ -143,7 +144,7 @@ menu = st.sidebar.radio("메뉴", ["새 회의 시작", "회의 기록 (History)
 # [메뉴 1] 새 회의 시작
 # ----------------------------------------------------
 if menu == "새 회의 시작":
-    st.title("🎙️ 클로바노트 스타일 회의록 생성기")
+    st.title("🎙️ AI 회의록 생성기")
     st.markdown("Google **Gemini**를 사용하여 **화자 분리(Diarization)** 및 **타임스탬프**가 포함된 기록을 만듭니다.")
 
     meeting_title = st.text_input("회의 제목", value=f"회의_{datetime.now().strftime('%Y%m%d_%H%M')}")
@@ -169,42 +170,77 @@ if menu == "새 회의 시작":
                 st.error(f"오류 발생: {e}")
 
 # ----------------------------------------------------
-# [메뉴 2] 회의 기록 (History) - 수정 기능 추가됨
+# [메뉴 2] 회의 기록 (History) - 보기/수정 모드 분리
 # ----------------------------------------------------
 elif menu == "회의 기록 (History)":
-    st.title("🗄️ 지난 회의 기록 (수정 가능)")
+    st.title("🗄️ 지난 회의 기록")
     
     # DB에서 최신순으로 가져오기
     df = pd.read_sql_query("SELECT * FROM meetings ORDER BY id DESC", conn)
     
     if not df.empty:
         for index, row in df.iterrows():
-            # 각 회의록을 Expander로 표시
             with st.expander(f"[{row['date']}] {row['title']}"):
                 
-                # 1. 제목 수정 영역
-                new_title = st.text_input("📌 회의 제목 수정", value=row['title'], key=f"title_{row['id']}")
-                
-                # 2. 탭 분리 (요약본 / 스크립트)
-                tab_summary, tab_script = st.tabs(["📝 회의록 요약 (수정)", "🗣️ 전체 스크립트 (수정)"])
-                
-                with tab_summary:
-                    st.caption("AI가 작성한 요약본입니다. 내용을 수정할 수 있습니다.")
-                    # 수정 가능한 텍스트 에어리어 (높이 조절)
-                    new_summary = st.text_area("summary_edit", value=row['summary'], height=500, label_visibility="collapsed", key=f"sum_{row['id']}")
-                
-                with tab_script:
-                    st.caption("전체 대화 내용입니다. 오타나 화자를 수정할 수 있습니다.")
-                    # 수정 가능한 텍스트 에어리어
-                    new_script = st.text_area("script_edit", value=row['script'], height=500, label_visibility="collapsed", key=f"scr_{row['id']}")
+                # 세션 스테이트 키 생성 (각 회의록마다 별도의 수정 모드 상태를 가짐)
+                edit_key = f"edit_mode_{row['id']}"
+                if edit_key not in st.session_state:
+                    st.session_state[edit_key] = False
 
-                # 3. 저장 버튼
-                col_btn, col_empty = st.columns([1, 4])
-                with col_btn:
-                    if st.button("💾 변경사항 저장", key=f"save_{row['id']}"):
-                        update_meeting(row['id'], new_title, new_script, new_summary)
-                        st.success("수정 내용이 저장되었습니다!")
-                        time.sleep(1) # 1초 뒤 새로고침
-                        st.rerun() # 화면 새로고침
+                # ----------------------------------------
+                # [모드 1] 수정 모드 (Edit Mode)
+                # ----------------------------------------
+                if st.session_state[edit_key]:
+                    st.info("수정 모드입니다. 내용을 수정하고 저장을 누르세요.")
+                    
+                    # 1. 제목 수정
+                    new_title = st.text_input("회의 제목", value=row['title'], key=f"title_{row['id']}")
+                    
+                    # 2. 탭 (에디터)
+                    tab_edit_sum, tab_edit_scr = st.tabs(["📝 회의록 수정", "🗣️ 스크립트 수정"])
+                    
+                    with tab_edit_sum:
+                        new_summary = st.text_area("summary_edit", value=row['summary'], height=500, label_visibility="collapsed", key=f"sum_{row['id']}")
+                    
+                    with tab_edit_scr:
+                        new_script = st.text_area("script_edit", value=row['script'], height=500, label_visibility="collapsed", key=f"scr_{row['id']}")
+
+                    # 3. 버튼 (저장 / 취소)
+                    col_save, col_cancel = st.columns([1, 8])
+                    with col_save:
+                        if st.button("💾 저장", key=f"save_{row['id']}"):
+                            update_meeting(row['id'], new_title, new_script, new_summary)
+                            st.session_state[edit_key] = False # 모드 해제
+                            st.success("저장되었습니다.")
+                            st.rerun() # 새로고침
+                    with col_cancel:
+                        if st.button("❌ 취소", key=f"cancel_{row['id']}"):
+                            st.session_state[edit_key] = False # 모드 해제
+                            st.rerun()
+
+                # ----------------------------------------
+                # [모드 2] 보기 모드 (View Mode) - Default
+                # ----------------------------------------
+                else:
+                    # 1. 제목 및 버튼
+                    col_title, col_edit_btn = st.columns([8, 1])
+                    with col_title:
+                        st.markdown(f"### {row['title']}")
+                    with col_edit_btn:
+                        if st.button("✏️ 수정", key=f"edit_btn_{row['id']}"):
+                            st.session_state[edit_key] = True # 수정 모드 켜기
+                            st.rerun()
+                    
+                    # 2. 탭 (뷰어 - Markdown 렌더링)
+                    tab_view_sum, tab_view_scr = st.tabs(["📝 회의록 요약", "🗣️ 상세 스크립트"])
+                    
+                    with tab_view_sum:
+                        # 깔끔한 마크다운 형태로 보여주기
+                        st.markdown(row['summary'])
+                    
+                    with tab_view_scr:
+                        # 스크립트는 읽기 전용 텍스트박스나 그냥 텍스트로 표시
+                        st.text_area("전체 대화 내용", value=row['script'], height=400, disabled=True, key=f"view_scr_{row['id']}")
+
     else:
         st.info("아직 저장된 회의 기록이 없습니다.")
