@@ -14,9 +14,9 @@ from streamlit_mic_recorder import mic_recorder
 # 1. 설정 및 데이터베이스 초기화
 # ==========================================
 
-st.set_page_config(page_title="AI 회의록 비서 (Final)", layout="wide")
+st.set_page_config(page_title="AI 회의록 비서 (Fixed)", layout="wide")
 
-# DB 연결 (충돌 방지를 위해 v4 사용)
+# DB 연결
 db_filename = 'meeting_history_v4.db'
 conn = sqlite3.connect(db_filename, check_same_thread=False)
 c = conn.cursor()
@@ -38,6 +38,24 @@ conn.commit()
 # ==========================================
 # 2. 헬퍼 함수
 # ==========================================
+
+def wait_for_files_active(files):
+    """
+    파일이 Google 서버에서 처리가 완료(ACTIVE)될 때까지 기다리는 함수
+    """
+    if not isinstance(files, list):
+        files = [files]
+    
+    for name in (file.name for file in files):
+        file = genai.get_file(name)
+        while file.state.name == "PROCESSING":
+            time.sleep(2) # 2초 대기
+            file = genai.get_file(name)
+        
+        if file.state.name != "ACTIVE":
+            raise Exception(f"파일 처리 실패: {file.state.name}")
+            
+    return
 
 def merge_audio_bytes(audio_chunks):
     """여러 WAV 조각 병합"""
@@ -66,13 +84,16 @@ def transcribe_audio_segment(audio_bytes, api_key):
         f.write(audio_bytes)
         
     try:
+        # 파일 업로드
         audio_file = genai.upload_file(path=temp_filename)
-        while audio_file.state.name == "PROCESSING":
-            time.sleep(0.2)
-            audio_file = genai.get_file(audio_file.name)
+        
+        # [중요] 파일 처리 대기 (ACTIVE 상태 확인)
+        wait_for_files_active(audio_file)
+        
         response = model.generate_content([audio_file, "이 오디오의 내용을 한국어(혹은 사용된 언어)로 정확하게 받아적어줘. 부가 설명 없이 텍스트만 출력해."])
         return response.text
-    except: return "(인식 대기 중...)"
+    except Exception as e:
+        return f"(인식 오류: {e})"
     finally:
         if os.path.exists(temp_filename): os.remove(temp_filename)
 
@@ -104,6 +125,7 @@ def generate_final_report(input_content, api_key, is_file=False):
     """
 
     if is_file:
+        # 파일 객체가 ACTIVE 상태인지 한 번 더 확인은 외부에서 함
         prompt = [input_content, f"이 미디어 파일 전체를 분석해서 회의록을 작성해줘.\n{SUMMARY_PROMPT}"]
     else:
         prompt = f"아래 스크립트를 바탕으로 회의록을 작성해.\n[스크립트]\n{input_content}\n{SUMMARY_PROMPT}"
@@ -115,14 +137,12 @@ def generate_final_report(input_content, api_key, is_file=False):
 
 def save_to_db(title, script, summary, filename, audio_blob):
     date_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-    query = "INSERT INTO meetings (date, title, script, summary, filename, audio_blob) VALUES (?, ?, ?, ?, ?, ?)"
-    c.execute(query, (date_str, title, script, summary, filename, audio_blob))
+    c.execute("INSERT INTO meetings (date, title, script, summary, filename, audio_blob) VALUES (?, ?, ?, ?, ?, ?)",
+              (date_str, title, script, summary, filename, audio_blob))
     conn.commit()
 
 def update_db(id, title, script, summary):
-    # 에러가 발생했던 부분을 안전하게 수정했습니다.
-    query = "UPDATE meetings SET title=?, script=?, summary=? WHERE id=?"
-    c.execute(query, (title, script, summary, id))
+    c.execute("UPDATE meetings SET title=?, script=?, summary=? WHERE id=?", (title, script, summary, id))
     conn.commit()
 
 # ==========================================
@@ -164,6 +184,7 @@ if menu == "🔴 실시간 회의 (Live)":
                     if len(st.session_state.live_script) % 2 == 0:
                         try:
                             genai.configure(api_key=api_key)
+                            # 요약은 텍스트 기반이라 파일 대기 필요 없음
                             res = genai.GenerativeModel('gemini-2.5-flash').generate_content(f"3줄 요약해:\n" + "\n".join(st.session_state.live_script))
                             st.session_state.interim_summary = res.text
                         except: pass
@@ -208,18 +229,22 @@ elif menu == "📂 파일 업로드 (MP3/MP4)":
                 temp_filename = "temp_" + uploaded_file.name
                 with open(temp_filename, "wb") as f: f.write(uploaded_file.getbuffer())
                 
-                with st.spinner("미디어 파일 업로드 및 AI 분석 중..."):
+                with st.spinner("미디어 파일 업로드 및 AI 처리 대기 중... (서버 처리 시간 소요)"):
+                    # 1. 파일 업로드
                     media_file = genai.upload_file(path=temp_filename)
-                    while media_file.state.name == "PROCESSING":
-                        time.sleep(2)
-                        media_file = genai.get_file(media_file.name)
                     
+                    # [핵심 수정] ACTIVE 상태가 될 때까지 확실히 기다림
+                    wait_for_files_active(media_file)
+                    
+                    # 2. STT 추출
                     stt_model = genai.GenerativeModel('gemini-2.5-pro')
                     res_script = stt_model.generate_content([media_file, "이 미디어의 모든 대화 내용을 [MM:SS] 화자: 내용 형식으로 받아적어줘."])
                     script_text = res_script.text
                     
+                    # 3. 회의록 생성 (이미 ACTIVE 상태인 media_file 사용)
                     res_sum = generate_final_report(media_file, api_key, is_file=True)
                     
+                    # 4. 저장
                     save_to_db(title, script_text, res_sum, uploaded_file.name, uploaded_file.getvalue())
                     st.success("완료!")
                     if os.path.exists(temp_filename): os.remove(temp_filename)
@@ -288,4 +313,3 @@ elif menu == "🗄️ 회의 기록":
                     with t2: st.markdown(f"<div style='background-color:#f9f9f9;padding:15px;max-height:400px;overflow-y:auto;'>{row['script'].replace(chr(10), '<br>')}</div>", unsafe_allow_html=True)
     else:
         st.info("기록 없음")
-
