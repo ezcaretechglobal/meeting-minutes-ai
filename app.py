@@ -108,7 +108,7 @@ def process_audio_with_gemini(uploaded_file, api_key):
             audio_file = genai.get_file(audio_file.name)
 
         # 4. 모델 설정 (Gemini 1.5 Pro 사용 - 화자 분리 성능이 더 좋음)
-        model = genai.GenerativeModel('gemini-2.5')
+        model = genai.GenerativeModel('gemini-2.5-flash')
 
         # 5. STT (스크립트 추출) 실행
         with st.spinner("🗣️ 목소리 구분 및 스크립트 작성 중 (시간이 조금 걸립니다)..."):
@@ -191,5 +191,6 @@ elif menu == "회의 기록 (History)":
                     st.text_area("상세 내용", row['script'], height=400, key=f"hist_{row['id']}")
     else:
         st.info("기록이 없습니다.")
+
 
 
