@@ -10,7 +10,7 @@ import time
 # 1. 설정 및 데이터베이스 초기화
 # ==========================================
 
-st.set_page_config(page_title="AI 회의록 비서", layout="wide")
+st.set_page_config(page_title="AI 회의록 비서 (Pro)", layout="wide")
 
 # DB 연결 및 테이블 생성
 conn = sqlite3.connect('meeting_history_google.db', check_same_thread=False)
@@ -28,10 +28,9 @@ c.execute('''
 conn.commit()
 
 # ==========================================
-# 2. 프롬프트 정의 (STT & 요약)
+# 2. 프롬프트 정의 (수정 없음)
 # ==========================================
 
-# 1) STT 전용 프롬프트 (화자 분리 및 타임스탬프 강제)
 STT_PROMPT = """
 너는 전문 속기사야. 제공된 오디오 파일을 듣고 정확한 회의 스크립트를 작성해.
 다음 규칙을 엄격하게 지켜야 해:
@@ -49,7 +48,6 @@ STT_PROMPT = """
 오디오의 처음부터 끝까지 빠짐없이 작성해.
 """
 
-# 2) 회의록 요약 프롬프트 (기존 내용을 유지하되 포맷에 최적화)
 SUMMARY_PROMPT = """
 # 역할 (Role)
 너는 ‘회의록 정리 전문 GPT’이다.
@@ -83,45 +81,33 @@ SUMMARY_PROMPT = """
 """
 
 # ==========================================
-# 3. AI 처리 함수 (Google Gemini Pro)
+# 3. AI 처리 및 DB 관리 함수
 # ==========================================
 
 def process_audio_with_gemini(uploaded_file, api_key):
     """Google Gemini Pro를 사용하여 STT(화자분리) -> 회의록 생성"""
-    
-    # 1. API 설정
     genai.configure(api_key=api_key)
     
-    # 2. 임시 파일 저장
     temp_filename = "temp_" + uploaded_file.name
     with open(temp_filename, "wb") as f:
         f.write(uploaded_file.getbuffer())
 
     try:
-        # 3. 파일 업로드
         with st.spinner("☁️ 구글 서버에 오디오 업로드 중..."):
             audio_file = genai.upload_file(path=temp_filename)
         
-        # 처리 대기
         while audio_file.state.name == "PROCESSING":
             time.sleep(2)
             audio_file = genai.get_file(audio_file.name)
 
-        # 4. 모델 설정 (Gemini 1.5 Pro 사용 - 화자 분리 성능이 더 좋음)
         model = genai.GenerativeModel('gemini-2.5-flash')
 
-        # 5. STT (스크립트 추출) 실행
-        with st.spinner("🗣️ 목소리 구분 및 스크립트 작성 중 (시간이 조금 걸립니다)..."):
-            response_script = model.generate_content(
-                [audio_file, STT_PROMPT]
-            )
+        with st.spinner("🗣️ 목소리 구분 및 스크립트 작성 중..."):
+            response_script = model.generate_content([audio_file, STT_PROMPT])
             script_text = response_script.text
 
-        # 6. 회의록 요약 실행
         with st.spinner("📝 스크립트 기반으로 회의록 정리 중..."):
-            response_summary = model.generate_content(
-                [script_text, SUMMARY_PROMPT]
-            )
+            response_summary = model.generate_content([script_text, SUMMARY_PROMPT])
             summary_text = response_summary.text
             
         return script_text, summary_text
@@ -133,9 +119,15 @@ def process_audio_with_gemini(uploaded_file, api_key):
             os.remove(temp_filename)
 
 def save_meeting(title, script, summary, filename):
+    """새 회의 저장"""
     date_str = datetime.now().strftime("%Y-%m-%d %H:%M")
     c.execute("INSERT INTO meetings (date, title, script, summary, filename) VALUES (?, ?, ?, ?, ?)",
               (date_str, title, script, summary, filename))
+    conn.commit()
+
+def update_meeting(id, title, script, summary):
+    """회의 내용 수정 업데이트"""
+    c.execute("UPDATE meetings SET title=?, script=?, summary=? WHERE id=?", (title, script, summary, id))
     conn.commit()
 
 # ==========================================
@@ -147,8 +139,11 @@ api_key = st.sidebar.text_input("Google API Key", type="password", help="AIza로
 
 menu = st.sidebar.radio("메뉴", ["새 회의 시작", "회의 기록 (History)"])
 
+# ----------------------------------------------------
+# [메뉴 1] 새 회의 시작
+# ----------------------------------------------------
 if menu == "새 회의 시작":
-    st.title("🎙️ AI 회의록 생성기")
+    st.title("🎙️ 클로바노트 스타일 회의록 생성기")
     st.markdown("Google **Gemini**를 사용하여 **화자 분리(Diarization)** 및 **타임스탬프**가 포함된 기록을 만듭니다.")
 
     meeting_title = st.text_input("회의 제목", value=f"회의_{datetime.now().strftime('%Y%m%d_%H%M')}")
@@ -161,37 +156,55 @@ if menu == "새 회의 시작":
             try:
                 script_result, summary_result = process_audio_with_gemini(uploaded_file, api_key)
                 save_meeting(meeting_title, script_result, summary_result, uploaded_file.name)
-                st.success("완료되었습니다!")
+                st.success("완료되었습니다! '회의 기록' 메뉴에서 확인하세요.")
                 
-                # 결과 탭 분리
+                # 결과 미리보기 (읽기 전용)
                 tab1, tab2 = st.tabs(["📝 회의록 요약", "🗣️ 상세 스크립트"])
-                
                 with tab1:
                     st.markdown(summary_result)
-                
                 with tab2:
                     st.text_area("전체 대화 내용", script_result, height=600)
                     
             except Exception as e:
                 st.error(f"오류 발생: {e}")
 
+# ----------------------------------------------------
+# [메뉴 2] 회의 기록 (History) - 수정 기능 추가됨
+# ----------------------------------------------------
 elif menu == "회의 기록 (History)":
-    st.title("🗄️ 지난 회의 기록")
+    st.title("🗄️ 지난 회의 기록 (수정 가능)")
+    
+    # DB에서 최신순으로 가져오기
     df = pd.read_sql_query("SELECT * FROM meetings ORDER BY id DESC", conn)
     
     if not df.empty:
         for index, row in df.iterrows():
+            # 각 회의록을 Expander로 표시
             with st.expander(f"[{row['date']}] {row['title']}"):
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.markdown("### 📑 요약본")
-                    st.markdown(row['summary'])
-                with col2:
-                    st.markdown("### 🗣️ 스크립트")
-                    st.text_area("상세 내용", row['script'], height=400, key=f"hist_{row['id']}")
+                
+                # 1. 제목 수정 영역
+                new_title = st.text_input("📌 회의 제목 수정", value=row['title'], key=f"title_{row['id']}")
+                
+                # 2. 탭 분리 (요약본 / 스크립트)
+                tab_summary, tab_script = st.tabs(["📝 회의록 요약 (수정)", "🗣️ 전체 스크립트 (수정)"])
+                
+                with tab_summary:
+                    st.caption("AI가 작성한 요약본입니다. 내용을 수정할 수 있습니다.")
+                    # 수정 가능한 텍스트 에어리어 (높이 조절)
+                    new_summary = st.text_area("summary_edit", value=row['summary'], height=500, label_visibility="collapsed", key=f"sum_{row['id']}")
+                
+                with tab_script:
+                    st.caption("전체 대화 내용입니다. 오타나 화자를 수정할 수 있습니다.")
+                    # 수정 가능한 텍스트 에어리어
+                    new_script = st.text_area("script_edit", value=row['script'], height=500, label_visibility="collapsed", key=f"scr_{row['id']}")
+
+                # 3. 저장 버튼
+                col_btn, col_empty = st.columns([1, 4])
+                with col_btn:
+                    if st.button("💾 변경사항 저장", key=f"save_{row['id']}"):
+                        update_meeting(row['id'], new_title, new_script, new_summary)
+                        st.success("수정 내용이 저장되었습니다!")
+                        time.sleep(1) # 1초 뒤 새로고침
+                        st.rerun() # 화면 새로고침
     else:
-        st.info("기록이 없습니다.")
-
-
-
-
+        st.info("아직 저장된 회의 기록이 없습니다.")
